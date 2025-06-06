@@ -15,6 +15,7 @@
     "@mantine/dates": "^8.0.2",
     "@mantine/form": "^8.0.2",
     "@mantine/hooks": "^8.0.2",
+    "@mantine/notifications": "^8.0.2",
     "@supabase/supabase-js": "^2.49.10",
     "dayjs": "^1.11.13",
     "react": "^19.1.0",

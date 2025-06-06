@@ -1,13 +1,22 @@
-import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { TextInput, PasswordInput, Button, Paper, Title, Text, Container, Box } from '@mantine/core';
+import { TextInput, PasswordInput, Button, Container, Title, Paper, Box, Loader, Center } from '@mantine/core';
 import { useForm } from '@mantine/form';
-import { supabase } from '../lib/supabase';
+import { showNotification } from '@mantine/notifications';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function Login() {
   const navigate = useNavigate();
-  const [error, setError] = useState('');
+  const { signIn, user, profile, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(false);
+
+  // Redirect if already logged in
+  useEffect(() => {
+    if (user && profile?.role) {
+      const redirectPath = profile.role === 'manager' ? '/manager' : '/employee';
+      navigate(redirectPath, { replace: true });
+    }
+  }, [user, profile, navigate]);
 
   const form = useForm({
     initialValues: {
@@ -16,96 +25,91 @@ export default function Login() {
     },
     validate: {
       email: (value) => (/^\S+@\S+$/.test(value) ? null : 'Invalid email'),
-      password: (value) => (value.length < 6 ? 'Password must be at least 6 characters' : null),
+      password: (value) => (value.length < 1 ? 'Password is required' : null),
     },
   });
 
-  const handleSubmit = async (values: typeof form.values) => {
+  const handleLogin = async (values: typeof form.values) => {
     try {
-      setError('');
       setLoading(true);
 
-      const { data, error: signInError } = await supabase.auth.signInWithPassword({
-        email: values.email,
-        password: values.password,
+      // Step 1: Sign in and get user profile
+      const { profile: userProfile } = await signIn(values.email, values.password);
+
+      // Step 2: Show success message
+      showNotification({
+        title: 'Welcome back!',
+        message: 'Successfully logged in',
+        color: 'green',
       });
 
-      if (signInError) throw signInError;
+      // Step 3: Navigate based on role
+      const redirectPath = userProfile.role === 'manager' ? '/manager' : '/employee';
+      navigate(redirectPath, { replace: true });
 
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', data.user.id)
-        .single();
-
-      if (profile?.role === 'manager') {
-        navigate('/manager');
-      } else {
-        navigate('/employee');
+    } catch (error) {
+      console.error('Login error:', error);
+      let message = 'Failed to sign in';
+      
+      if (error instanceof Error) {
+        message = error.message;
+        // Handle Supabase specific errors
+        if (message.includes('Invalid login credentials')) {
+          message = 'Invalid email or password';
+        }
       }
-    } catch (err) {
-      console.error('Login error:', err);
-      setError('Failed to sign in. Please check your credentials.');
+      
+      showNotification({
+        title: 'Error',
+        message,
+        color: 'red',
+      });
     } finally {
       setLoading(false);
     }
   };
 
-  return (
-    <Box sx={{ 
-      minHeight: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      background: '#f8f9fa'
-    }}>
-      <Container size={420}>
-        <Title
-          align="center"
-          sx={(theme) => ({
-            fontSize: '2rem',
-            fontWeight: 900,
-            marginBottom: theme.spacing.md,
-          })}
-        >
-          Welcome back!
-        </Title>
-        <Text color="dimmed" size="sm" align="center" mb={30}>
-          Don't have an account yet?{' '}
-          <Link to="/signup" style={{ color: '#228be6', textDecoration: 'none' }}>
-            Create account
-          </Link>
-        </Text>
+  // Show loading spinner while checking auth state
+  if (authLoading) {
+    return (
+      <Center h="100vh">
+        <Loader size="lg" />
+      </Center>
+    );
+  }
 
-        <Paper withBorder shadow="md" p={30} radius="md" bg="white">
-          <form onSubmit={form.onSubmit(handleSubmit)}>
+  return (
+    <Box bg="gray.1" h="100vh" pt={50}>
+      <Container size="xs">
+        <Paper shadow="md" p={30} radius="md" bg="white">
+          <Title order={2} ta="center" mb="xl">
+            Welcome Back
+          </Title>
+
+          <form onSubmit={form.onSubmit(handleLogin)}>
             <TextInput
               label="Email"
-              placeholder="Enter your email"
-              size="md"
+              placeholder="your@email.com"
+              type="email"
               required
+              mb="md"
               {...form.getInputProps('email')}
             />
+
             <PasswordInput
               label="Password"
-              placeholder="Enter your password"
-              size="md"
+              placeholder="Your password"
               required
-              mt="md"
+              mb="xl"
               {...form.getInputProps('password')}
             />
-            {error && (
-              <Text color="red" size="sm" mt="sm">
-                {error}
-              </Text>
-            )}
+
             <Button 
               fullWidth 
-              mt="xl" 
-              size="md"
-              type="submit" 
+              type="submit"
               loading={loading}
             >
-              Sign in
+              Login
             </Button>
           </form>
         </Paper>

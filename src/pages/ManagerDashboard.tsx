@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
-import { Container, Title, Button, Group, Text, Card, Modal, TextInput, Select, Table } from '@mantine/core';
+import { Container, Title, Button, Group, Text, Card, Modal, TextInput, Select, Table, Loader, Center } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import { showNotification } from '@mantine/notifications';
 import type { Tables } from '../lib/supabase';
 
-type Project = Tables['projects'];
-type Profile = Tables['profiles'];
-type TimeLog = Tables['time_logs'];
+type Project = Tables['projects']['Row'];
+type Profile = Tables['profiles']['Row'];
+type TimeLog = Tables['time_logs']['Row'];
 
 export default function ManagerDashboard() {
   const navigate = useNavigate();
@@ -19,6 +20,8 @@ export default function ManagerDashboard() {
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [isEmployeeModalOpen, setIsEmployeeModalOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const projectForm = useForm({
     initialValues: {
@@ -39,9 +42,41 @@ export default function ManagerDashboard() {
   });
 
   useEffect(() => {
-    fetchProjects();
-    fetchEmployees();
-  }, []);
+    const initializeDashboard = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        // Verify user session
+        const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
+        if (userError) throw new Error('Failed to get user session');
+        if (!currentUser) {
+          navigate('/login', { replace: true });
+          return;
+        }
+
+        // Verify user role
+        if (!profile?.role || profile.role !== 'manager') {
+          throw new Error('Unauthorized: Manager access required');
+        }
+
+        // Fetch initial data
+        await Promise.all([fetchProjects(), fetchEmployees()]);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to load dashboard';
+        setError(message);
+        showNotification({
+          title: 'Error',
+          message,
+          color: 'red',
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initializeDashboard();
+  }, [navigate, profile]);
 
   useEffect(() => {
     if (selectedProject) {
@@ -51,15 +86,18 @@ export default function ManagerDashboard() {
 
   const fetchProjects = async () => {
     try {
+      if (!user?.id) throw new Error('User ID not found');
+
       const { data, error } = await supabase
         .from('projects')
         .select('*')
-        .eq('manager_id', user?.id);
+        .eq('manager_id', user.id);
       
       if (error) throw error;
       setProjects(data || []);
     } catch (error) {
       console.error('Error fetching projects:', error);
+      throw error;
     }
   };
 
@@ -74,6 +112,7 @@ export default function ManagerDashboard() {
       setEmployees(data || []);
     } catch (error) {
       console.error('Error fetching employees:', error);
+      throw error;
     }
   };
 
@@ -89,23 +128,41 @@ export default function ManagerDashboard() {
       setTimeLogs(data || []);
     } catch (error) {
       console.error('Error fetching time logs:', error);
+      showNotification({
+        title: 'Error',
+        message: 'Failed to fetch time logs',
+        color: 'red',
+      });
     }
   };
 
   const handleCreateProject = async (values: typeof projectForm.values) => {
     try {
+      if (!user?.id) throw new Error('User ID not found');
+
       const { error } = await supabase.from('projects').insert({
         name: values.name,
-        manager_id: user?.id,
+        manager_id: user.id,
       });
 
       if (error) throw error;
 
       projectForm.reset();
       setIsProjectModalOpen(false);
-      fetchProjects();
+      await fetchProjects();
+      
+      showNotification({
+        title: 'Success',
+        message: 'Project created successfully',
+        color: 'green',
+      });
     } catch (error) {
       console.error('Error creating project:', error);
+      showNotification({
+        title: 'Error',
+        message: 'Failed to create project',
+        color: 'red',
+      });
     }
   };
 
@@ -116,19 +173,53 @@ export default function ManagerDashboard() {
       await inviteEmployee(values.email, selectedProject.id);
       employeeForm.reset();
       setIsEmployeeModalOpen(false);
+      showNotification({
+        title: 'Success',
+        message: 'Invitation sent successfully',
+        color: 'green',
+      });
     } catch (error) {
       console.error('Error inviting employee:', error);
+      showNotification({
+        title: 'Error',
+        message: 'Failed to send invitation',
+        color: 'red',
+      });
     }
   };
 
   const handleSignOut = async () => {
     try {
       await signOut();
-      navigate('/login');
+      navigate('/login', { replace: true });
     } catch (error) {
       console.error('Error signing out:', error);
+      showNotification({
+        title: 'Error',
+        message: 'Failed to sign out',
+        color: 'red',
+      });
     }
   };
+
+  if (loading) {
+    return (
+      <Center h="100vh">
+        <Loader size="lg" />
+      </Center>
+    );
+  }
+
+  if (error) {
+    return (
+      <Center h="100vh">
+        <div>
+          <Text color="red" size="lg" mb="md">{error}</Text>
+          <Button onClick={handleSignOut}>Return to Login</Button>
+        </div>
+      </Center>
+    );
+  }
 
   return (
     <Container size="lg" py="xl">
@@ -147,35 +238,39 @@ export default function ManagerDashboard() {
       </Button>
 
       <Title order={2} mb="md">Projects</Title>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-        {projects.map((project) => (
-          <Card 
-            key={project.id} 
-            shadow="sm" 
-            p="lg"
-            className="cursor-pointer hover:shadow-md transition-shadow"
-            onClick={() => setSelectedProject(project)}
-          >
-            <Title order={3}>{project.name}</Title>
-            <Text color="dimmed" size="sm">
-              Created: {new Date(project.created_at).toLocaleDateString()}
-            </Text>
-            <Button
-              variant="light"
-              color="blue"
-              fullWidth
-              mt="md"
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedProject(project);
-                setIsEmployeeModalOpen(true);
-              }}
+      {projects.length === 0 ? (
+        <Text color="dimmed">No projects found. Create your first project to get started.</Text>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+          {projects.map((project) => (
+            <Card 
+              key={project.id} 
+              shadow="sm" 
+              p="lg"
+              className="cursor-pointer hover:shadow-md transition-shadow"
+              onClick={() => setSelectedProject(project)}
             >
-              Invite Employee
-            </Button>
-          </Card>
-        ))}
-      </div>
+              <Title order={3}>{project.name}</Title>
+              <Text color="dimmed" size="sm">
+                Created: {new Date(project.created_at).toLocaleDateString()}
+              </Text>
+              <Button
+                variant="light"
+                color="blue"
+                fullWidth
+                mt="md"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedProject(project);
+                  setIsEmployeeModalOpen(true);
+                }}
+              >
+                Invite Employee
+              </Button>
+            </Card>
+          ))}
+        </div>
+      )}
 
       {selectedProject && (
         <>

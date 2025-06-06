@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Container, Title, Button, Group, Text, Card, Table } from '@mantine/core';
+import { Container, Title, Button, Group, Text, Card, Table, Loader, Center } from '@mantine/core';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import { showNotification } from '@mantine/notifications';
 import TimeLogModal from '../components/TimeLogModal';
 import type { Tables } from '../lib/supabase';
 
-type Project = Tables['projects'];
-type TimeLog = Tables['time_logs'];
+type Project = Tables['projects']['Row'];
+type TimeLog = Tables['time_logs']['Row'];
 
 export default function EmployeeDashboard() {
   const navigate = useNavigate();
@@ -15,18 +16,54 @@ export default function EmployeeDashboard() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [timeLogs, setTimeLogs] = useState<TimeLog[]>([]);
   const [isTimeLogModalOpen, setIsTimeLogModalOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchProjects();
-    fetchTimeLogs();
-  }, []);
+    const initializeDashboard = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+
+        // Verify user session
+        const { data: { user: currentUser }, error: userError } = await supabase.auth.getUser();
+        if (userError) throw new Error('Failed to get user session');
+        if (!currentUser) {
+          navigate('/login', { replace: true });
+          return;
+        }
+
+        // Verify user role
+        if (!profile?.role || profile.role !== 'employee') {
+          throw new Error('Unauthorized: Employee access required');
+        }
+
+        // Fetch initial data
+        await Promise.all([fetchProjects(), fetchTimeLogs()]);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to load dashboard';
+        setError(message);
+        showNotification({
+          title: 'Error',
+          message,
+          color: 'red',
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initializeDashboard();
+  }, [navigate, profile]);
 
   const fetchProjects = async () => {
     try {
+      if (!user?.id) throw new Error('User ID not found');
+
       const { data: projectEmployees, error: projectEmployeesError } = await supabase
         .from('project_employees')
         .select('project_id')
-        .eq('user_id', user?.id)
+        .eq('user_id', user.id)
         .eq('status', 'accepted');
 
       if (projectEmployeesError) throw projectEmployeesError;
@@ -41,35 +78,65 @@ export default function EmployeeDashboard() {
 
         if (projectsError) throw projectsError;
         setProjects(projectsData || []);
+      } else {
+        setProjects([]);
       }
     } catch (error) {
       console.error('Error fetching projects:', error);
+      throw error;
     }
   };
 
   const fetchTimeLogs = async () => {
     try {
+      if (!user?.id) throw new Error('User ID not found');
+
       const { data, error } = await supabase
         .from('time_logs')
         .select('*, projects(name)')
-        .eq('user_id', user?.id)
+        .eq('user_id', user.id)
         .order('date', { ascending: false });
 
       if (error) throw error;
       setTimeLogs(data || []);
     } catch (error) {
       console.error('Error fetching time logs:', error);
+      throw error;
     }
   };
 
   const handleSignOut = async () => {
     try {
       await signOut();
-      navigate('/login');
+      navigate('/login', { replace: true });
     } catch (error) {
       console.error('Error signing out:', error);
+      showNotification({
+        title: 'Error',
+        message: 'Failed to sign out',
+        color: 'red',
+      });
     }
   };
+
+  if (loading) {
+    return (
+      <Center h="100vh">
+        <Loader size="lg" />
+      </Center>
+    );
+  }
+
+  if (error) {
+    return (
+      <Center h="100vh">
+        <div>
+          <Text color="red" size="lg" mb="md">{error}</Text>
+          <Button onClick={handleSignOut}>Return to Login</Button>
+        </div>
+      </Center>
+    );
+  }
 
   return (
     <Container size="lg" py="xl">
